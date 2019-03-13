@@ -1,0 +1,16 @@
+{
+  "name": "filejet/filejet-external-php",
+  "description": "Library containing functions for manipulating external files of FileJet",
+  "license": "MIT",
+  "type": "library",
+  "autoload": {
+    "psr-4": {
+      "FileJet\\External\\": "src/"
+    }
+  },
+  "require": {
+    "php": "^7.1",
+    "ext-dom": "*",
+    "ext-libxml": "*"
+  }
+}
