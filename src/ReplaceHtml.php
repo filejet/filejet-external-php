@@ -84,7 +84,7 @@ class ReplaceHtml
 
     }
 
-    private function prefixImageSource(string $originalSource): string
+    public function prefixImageSource(string $originalSource): string
     {
         $source = strpos($originalSource, $this->basePath) === 0
             ? $originalSource
