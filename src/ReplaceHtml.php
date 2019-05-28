@@ -54,6 +54,7 @@ class ReplaceHtml
             if ($image->parentNode->tagName === 'noscript') continue;
 
             $originalSource = $image->getAttribute($sourceAttribute);
+            if($this->isDataURL($originalSource)) continue;
             if (strpos($originalSource, '.svg') !== false) continue;
 
             $image->parentNode->appendChild($this->createNoScript($image));
@@ -138,4 +139,10 @@ class ReplaceHtml
 
         return implode(' ', $classes);
     }
+
+    private function isDataURL(string $source): bool
+    {
+        return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
+    }
+
 }
