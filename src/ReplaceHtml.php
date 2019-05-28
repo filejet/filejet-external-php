@@ -83,9 +83,13 @@ class ReplaceHtml
 
             $parsed = parse_url($originalSource);
             if (empty($parsed['scheme'])) {
-                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$_SERVER[HTTP_HOST]";
-                $path = '/' . trim($originalSource, '/');
-                $originalSource = $actual_link . $path;
+                $path = $parsed['path'] ?? '';
+                $host = $_SERVER['HTTP_HOST'];
+                if(strpos($originalSource, $host) !== false) {
+                    $path = substr(strstr($originalSource, $host), strlen($host));
+                }
+                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
+                $originalSource = $actual_link . '/' . trim($path, '/');
             }
 
             $fill = false;
