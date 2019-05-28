@@ -78,6 +78,7 @@ class ReplaceHtml
             }
 
             $originalSource = $image->getAttribute('src');
+            if($this->isDataURL($originalSource)) continue;
             if (strpos($originalSource, '.svg') !== false) continue;
 
             $fill = false;
@@ -186,6 +187,11 @@ class ReplaceHtml
     {
         if ($this->secret == null) return '';
         return '&sig=' . hash_hmac('sha256', $url, $this->secret);
+    }
+
+    private function isDataURL(string $source): bool
+    {
+        return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
 }
 
