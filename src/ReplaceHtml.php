@@ -81,6 +81,13 @@ class ReplaceHtml
             if($this->isDataURL($originalSource)) continue;
             if (strpos($originalSource, '.svg') !== false) continue;
 
+            $parsed = parse_url($originalSource);
+            if (empty($parsed['scheme'])) {
+                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$_SERVER[HTTP_HOST]";
+                $path = '/' . trim($originalSource, '/');
+                $originalSource = $actual_link . $path;
+            }
+
             $fill = false;
             if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) $fill = true;
 
