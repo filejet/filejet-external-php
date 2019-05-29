@@ -10,6 +10,7 @@ class ReplaceHtml
     const MUTATION_PLACEHOLDER = "#mutation#";
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
+    const FILEJET_IMAGE_CLASS = 'fj-image';
 
     /** @var string */
     private $urlPrefix;
@@ -46,6 +47,7 @@ class ReplaceHtml
         libxml_clear_errors();
 
         $this->replaceImageTags($ignored, $mutations);
+        $this->replaceStyleBackground();
         return $this->dom->saveHTML();
     }
 
@@ -196,13 +198,73 @@ class ReplaceHtml
 
     private function signUrl($url)
     {
-        if ($this->secret == null) return '';
+        if ($this->secret === null) {
+            return '';
+        }
         return '&sig=' . hash_hmac('sha256', $url, $this->secret);
     }
 
-    private function isDataURL(string $source): bool
+    private function isDataURL(string $source)
     {
         return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
+
+    private function replaceStyleBackground()
+    {
+        $xpath = new \DOMXPath($this->dom);
+        /** @var \DOMElement[] $images */
+        $images = $xpath->query('//*[contains(@style, "background")]');
+        foreach ($images as $image) {
+            $style = $image->getAttribute('style');
+            if (empty($style)) {
+                continue;
+            }
+            $image->setAttribute('style', $this->prefixBackgroundImages($style));
+            $this->replaceClass($image);
+        };
+    }
+
+    private function replaceClass(\DOMElement $element)
+    {
+        $class = $element->getAttribute('class');
+        $element->setAttribute('class', $this->addClass($class, self::FILEJET_IMAGE_CLASS));
+    }
+
+    private function addClass(string $original, string $new): string
+    {
+        if ($original === '') {
+            return $new;
+        }
+        $classes = explode(' ', $original);
+        $classes[] = $new;
+        return implode(' ', $classes);
+    }
+
+    private function prefixBackgroundImages(string $style)
+    {
+        $style = stripslashes($style);
+        $rules = explode(';', $style);
+        foreach ($rules as $rule) {
+            if (strpos($rule, 'background') === false) {
+                continue;
+            }
+            if (strpos($rule, 'url') === false) {
+                continue;
+            }
+            preg_match('~\.*url\([\'"]?([^\'"]*)[\'"]?\)~i', $rule, $matches);
+            if (empty($matches)) {
+                continue;
+            }
+            $source = $matches[1];
+            if ($source === null) {
+                continue;
+            }
+            $prefixed = $this->prefixImageSource($source);
+            $mutated = $this->mutateImage($prefixed);
+            $style = str_replace($source, $mutated, $style);
+        }
+        return $style;
+    }
+
 }
 
