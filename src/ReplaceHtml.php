@@ -1,13 +1,11 @@
 <?php
 
-declare(strict_types=1);
-
 namespace FileJet\External;
 
 class ReplaceHtml
 {
-    const SOURCE_PLACEHOLDER = "#source#";
-    const MUTATION_PLACEHOLDER = "#mutation#";
+    const SOURCE_PLACEHOLDER = '#source#';
+    const MUTATION_PLACEHOLDER = '#mutation#';
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
 
@@ -21,11 +19,12 @@ class ReplaceHtml
     private $secret;
 
     public function __construct(
-        string $storageId,
-        string $lazyLoadAttribute = null,
-        string $basePath = null,
-        string $secret = null
-    ) {
+        $storageId,
+        $lazyLoadAttribute = null,
+        $basePath = null,
+        $secret = null
+    )
+    {
         $source = self::SOURCE_PLACEHOLDER;
         $mutation = self::MUTATION_PLACEHOLDER;
         $this->urlPrefix = "https://{$storageId}.5gcdn.net/ext/{$mutation}?src={$source}";
@@ -34,9 +33,11 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
-    public function replaceImages(string $content = null, array $ignored = [], array $mutations = []): string
+    public function replaceImages($content = null, array $ignored = [], array $mutations = [])
     {
-        if (empty($content)) return '';
+        if ($content === null) {
+            return '';
+        }
 
         libxml_use_internal_errors(true);
         $this->dom->loadHTML(
@@ -49,7 +50,7 @@ class ReplaceHtml
         return $this->dom->saveHTML();
     }
 
-    public function prefixImageSource(string $originalSource): string
+    public function prefixImageSource($originalSource)
     {
         $source = strpos($originalSource, $this->basePath) === 0
             ? $originalSource
@@ -67,25 +68,25 @@ class ReplaceHtml
         foreach ($images as $image) {
             if ($image->parentNode->tagName === 'noscript') continue;
 
-            $imageClasses = explode(' ', $image->getAttribute('class') ?? '');
+            $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
             if (false === empty(array_intersect($imageClasses, $ignored))) {
                 continue;
             }
 
-            $parentClasses = explode(' ', $image->parentNode->getAttribute('class') ?? '');
+            $parentClasses = explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : '');
             if (false === empty(array_intersect($parentClasses, $ignored))) {
                 continue;
             }
 
             $originalSource = $image->getAttribute('src');
-            if($this->isDataURL($originalSource)) continue;
+            if ($this->isDataURL($originalSource)) continue;
             if (strpos($originalSource, '.svg') !== false) continue;
 
             $parsed = parse_url($originalSource);
             if (empty($parsed['scheme'])) {
-                $path = $parsed['path'] ?? '';
+                $path = $parsed['path'] ?: '';
                 $host = $_SERVER['HTTP_HOST'];
-                if(strpos($originalSource, $host) !== false) {
+                if (strpos($originalSource, $host) !== false) {
                     $path = substr(strstr($originalSource, $host), strlen($host));
                 }
                 $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
@@ -128,25 +129,23 @@ class ReplaceHtml
         }
     }
 
-    public function getAspectRatio(int $width, int $height): float
+    public function getAspectRatio($width, $height)
     {
         return $width > $height ? ($width / $height) : ($height / $width);
     }
 
-    public function mutateImage(string $source, string $height = null, string $width = null, bool $fill = false, array $customMutations = []): string
+    public function mutateImage($source, $height = null, $width = null, $fill = false, array $customMutations = [])
     {
         $mutation = 'auto';
 
         if (false === empty($customMutations)) {
             $mutation = implode(',', array_merge($customMutations, ['auto']));
         } else if (!empty($height) && empty($width)) {
-            $mutation = "resize_x" . $height . "shrink," . $mutation;
+            $mutation = 'resize_x' . $height . 'shrink,' . $mutation;
         } else if (empty($height) && !empty($width)) {
-            $mutation = "resize_" . $width . "shrink," . $mutation;
-        } else if ($fill && !empty($height) && !empty($width)) {
-            $mutation = "resize_" . $width . "x" . $height . ",crop_" . $width . "x" . $height . ",pos_center,fill_" . $width . "x" . $height . ",bg_transparent," . $mutation;
+            $mutation = 'resize_' . $width . 'shrink,' . $mutation;
         } else if (!empty($height) && !empty($width)) {
-            $mutation = "fit_$width" . "x" . "$height," . $mutation;
+            $mutation = $fill ? 'resize_' . $width . 'x' . $height . ',crop_' . $width . 'x' . $height . ',pos_center,fill_' . $width . 'x' . $height . ',bg_transparent,' . $mutation : "fit_$width" . 'x' . "$height," . $mutation;
         }
         return str_replace(self::MUTATION_PLACEHOLDER, $mutation, $source);
     }
@@ -173,7 +172,7 @@ class ReplaceHtml
             if (!empty($value = $image->getAttribute($dimension))) return $value;
 
             //if no styles are present
-            if (count($rules) == 0) continue;
+            if (count($rules) === 0) continue;
 
             foreach ($rules as $rule) {
                 if (strpos($rule, $dimension) !== false) {
@@ -196,13 +195,13 @@ class ReplaceHtml
 
     private function signUrl($url)
     {
-        if ($this->secret == null) return '';
+        if ($this->secret === null) return '';
         return '&sig=' . hash_hmac('sha256', $url, $this->secret);
     }
 
-    private function isDataURL(string $source): bool
+    private function isDataURL($source)
     {
-        return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
+        return (bool)preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
 }
 
