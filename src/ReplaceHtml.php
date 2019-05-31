@@ -11,6 +11,9 @@ class ReplaceHtml
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
 
+    const ATTRIBUTE_SRC = 'src';
+    const ATTRIBUTE_SRCSET = 'srcset';
+
     /** @var string */
     private $urlPrefix;
     /** @var \DOMDocument */
@@ -25,7 +28,8 @@ class ReplaceHtml
         string $lazyLoadAttribute = null,
         string $basePath = null,
         string $secret = null
-    ) {
+    )
+    {
         $source = self::SOURCE_PLACEHOLDER;
         $mutation = self::MUTATION_PLACEHOLDER;
         $this->urlPrefix = "https://{$storageId}.5gcdn.net/ext/{$mutation}?src={$source}";
@@ -34,7 +38,7 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
-    public function replaceImages(string $content = null, array $ignored = [], array $mutations = []): string
+    public function replaceImages(string $content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = []): string
     {
         if (empty($content)) return '';
 
@@ -45,7 +49,7 @@ class ReplaceHtml
         );
         libxml_clear_errors();
 
-        $this->replaceImageTags($ignored, $mutations);
+        $this->replaceImageTags($ignored, $mutations, $lazyLoaded);
         return $this->dom->saveHTML();
     }
 
@@ -58,73 +62,89 @@ class ReplaceHtml
         return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($originalSource);
     }
 
-    private function replaceImageTags(array $ignored = [], array $mutations = [])
+    private function replaceImageTags(array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
         /** @var \DOMElement[] $images */
         $images = $this->dom->getElementsByTagName('img');
         $ignored = array_merge($ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
 
         foreach ($images as $image) {
-            if ($image->parentNode->tagName === 'noscript') continue;
-
-            $imageClasses = explode(' ', $image->getAttribute('class') ?? '');
-            if (false === empty(array_intersect($imageClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', $image->getAttribute('class') ?? ''), $ignored))) {
                 continue;
             }
 
-            $parentClasses = explode(' ', $image->parentNode->getAttribute('class') ?? '');
-            if (false === empty(array_intersect($parentClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', $image->parentNode->getAttribute('class') ?? ''), $ignored))) {
                 continue;
             }
 
-            $originalSource = $image->getAttribute('src');
-            if($this->isDataURL($originalSource)) continue;
-            if (strpos($originalSource, '.svg') !== false) continue;
+            $this->handleSource($image);
 
-            $parsed = parse_url($originalSource);
-            if (empty($parsed['scheme'])) {
-                $path = $parsed['path'] ?? '';
-                $host = $_SERVER['HTTP_HOST'];
-                if(strpos($originalSource, $host) !== false) {
-                    $path = substr(strstr($originalSource, $host), strlen($host));
-                }
-                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
-                $originalSource = $actual_link . '/' . trim($path, '/');
+            foreach ($lazyLoaded as $src => $srcset) {
+                $this->handleSource($image, $src, $srcset);
             }
+        }
+    }
 
-            $fill = false;
-            if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) $fill = true;
+    private function handleSource($image, $originalAttribute = self::ATTRIBUTE_SRC, $setAttribute = self::ATTRIBUTE_SRCSET)
+    {
+        $originalSource = $image->getAttribute($originalAttribute);
+        if ($this->isDataURL($originalSource)) return;
+        if (strpos($originalSource, '.svg') !== false) return;
 
-            $height = $this->getHeight($image);
-            $width = $this->getWidth($image);
-            $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
+        $this->toAbsoluteUri($originalSource);
 
-            $customMutations = false === empty($imageClasses) ? array_intersect_key($mutations, array_flip($imageClasses)) : [];
-            $prefixedSource = $this->prefixImageSource($originalSource);
-            $image->setAttribute('src', $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+        $fill = false;
+        if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) $fill = true;
 
-            $srcSet = $image->getAttribute('srcset');
-            if (empty($srcSet)) {
-                continue;
+        $height = $this->getHeight($image);
+        $width = $this->getWidth($image);
+        $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
+
+
+        $customMutations = false === empty($imageClasses) ? array_intersect_key($mutations, array_flip($imageClasses)) : [];
+        $prefixedSource = $this->prefixImageSource($originalSource);
+        $image->setAttribute($originalAttribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+
+        if (empty($setAttribute)) {
+            return;
+        }
+
+        $srcSet = $image->getAttribute($setAttribute);
+        if (empty($srcSet)) {
+            return;
+        }
+
+        $sources = explode(', ', $srcSet);
+        $newSources = [];
+
+        foreach ($sources as $source) {
+            list($url, $w) = explode(' ', $source);
+            $widthAsInt = (int)$w;
+            $customMutation = "resize_$widthAsInt";
+            if ($ratio !== null) {
+                $h = round($widthAsInt / $ratio);
+                $customMutation .= "x$h";
             }
+            $prefixedSource = $this->prefixImageSource($url);
+            $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
+            $newSources[] = "$newUrl $w";
 
-            $sources = explode(', ', $srcSet);
-            $newSources = [];
+        }
 
-            foreach ($sources as $source) {
-                list($url, $w) = explode(' ', $source);
-                $widthAsInt = (int)$w;
-                $customMutation = "resize_$widthAsInt";
-                if ($ratio !== null) {
-                    $h = round($widthAsInt / $ratio);
-                    $customMutation .= "x$h";
-                }
-                $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
-                $newSources[] = "$newUrl $w";
+        $image->setAttribute($setAttribute, implode(', ', $newSources));
+    }
 
+    private function toAbsoluteUri(&$uri)
+    {
+        $parsed = parse_url($uri);
+        if (empty($parsed['scheme'])) {
+            $path = $parsed['path'] ?? '';
+            $host = $_SERVER['HTTP_HOST'];
+            if (strpos($uri, $host) !== false) {
+                $path = substr(strstr($uri, $host), strlen($host));
             }
-
-            $image->setAttribute('srcset', implode(', ', $newSources));
+            $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
+            $uri = $actual_link . '/' . trim($path, '/');
         }
     }
 
@@ -172,7 +192,6 @@ class ReplaceHtml
             $value = null;
             if (!empty($value = $image->getAttribute($dimension))) return $value;
 
-            //if no styles are present
             if (count($rules) == 0) continue;
 
             foreach ($rules as $rule) {
@@ -202,7 +221,7 @@ class ReplaceHtml
 
     private function isDataURL(string $source): bool
     {
-        return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
+        return (bool)preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
 }
 
