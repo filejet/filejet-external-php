@@ -13,8 +13,6 @@ class ReplaceHtml
 
     const ATTRIBUTE_SRC = 'src';
     const ATTRIBUTE_SRCSET = 'srcset';
-    const ATTRIBUTE_LAZY_SRC = 'data-lazy-src';
-    const ATTRIBUTE_LAZY_SRCSET = 'data-lazy-srcset';
 
     /** @var string */
     private $urlPrefix;
@@ -40,7 +38,7 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
-    public function replaceImages(string $content = null, array $ignored = [], array $mutations = []): string
+    public function replaceImages(string $content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = []): string
     {
         if (empty($content)) return '';
 
@@ -51,7 +49,7 @@ class ReplaceHtml
         );
         libxml_clear_errors();
 
-        $this->replaceImageTags($ignored, $mutations);
+        $this->replaceImageTags($ignored, $mutations, $lazyLoaded);
         return $this->dom->saveHTML();
     }
 
@@ -64,7 +62,7 @@ class ReplaceHtml
         return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($originalSource);
     }
 
-    private function replaceImageTags(array $ignored = [], array $mutations = [])
+    private function replaceImageTags(array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
         /** @var \DOMElement[] $images */
         $images = $this->dom->getElementsByTagName('img');
@@ -80,13 +78,11 @@ class ReplaceHtml
             }
 
             $this->handleSource($image);
-            $this->handleLazySource($image);
-        }
-    }
 
-    private function handleLazySource($image)
-    {
-        $this->handleSource($image, self::ATTRIBUTE_LAZY_SRC, self::ATTRIBUTE_LAZY_SRCSET);
+            foreach ($lazyLoaded as $src => $srcset) {
+                $this->handleSource($image, $src, $srcset);
+            }
+        }
     }
 
     private function handleSource($image, $originalAttribute = self::ATTRIBUTE_SRC, $setAttribute = self::ATTRIBUTE_SRCSET)
@@ -108,6 +104,10 @@ class ReplaceHtml
         $customMutations = false === empty($imageClasses) ? array_intersect_key($mutations, array_flip($imageClasses)) : [];
         $prefixedSource = $this->prefixImageSource($originalSource);
         $image->setAttribute($originalAttribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+
+        if (empty($setAttribute)) {
+            return;
+        }
 
         $srcSet = $image->getAttribute($setAttribute);
         if (empty($srcSet)) {
