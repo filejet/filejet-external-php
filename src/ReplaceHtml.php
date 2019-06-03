@@ -88,19 +88,23 @@ class ReplaceHtml
                 continue;
             }
 
+            /** DEFAULT */
             $this->handleSource($image);
+            $this->handleSourceSet($image);
 
-            foreach ($this->lazyLoaded as $src => $srcset) {
-                $this->handleSource($image, $src, $srcset);
+            foreach ($this->lazyLoaded as $attribute) {
+                if(false === $image->hasAttribute($attribute)) {
+                    continue;
+                }
+                $this->hasMultipleSources($image, $attribute) ? $this->handleSourceSet($image, $attribute) : $this->handleSource($image, $attribute);
             }
         }
     }
 
-    private function handleSource($image, $originalAttribute = self::ATTRIBUTE_SRC, $setAttribute = self::ATTRIBUTE_SRCSET)
-    {
+    private function handleSource($image, $attribute = self::ATTRIBUTE_SRC) {
         /** @var \DOMElement $image
          */
-        $originalSource = $image->getAttribute($originalAttribute);
+        $originalSource = $image->getAttribute($attribute);
         if ($this->isDataURL($originalSource)) {
             return;
         }
@@ -117,18 +121,17 @@ class ReplaceHtml
 
         $height = $this->getHeight($image);
         $width = $this->getWidth($image);
-        $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
 
         $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
         $customMutations = false === empty($imageClasses) ? array_intersect_key($this->mutations, array_flip($imageClasses)) : [];
         $prefixedSource = $this->prefixImageSource($originalSource);
-        $image->setAttribute($originalAttribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+        $image->setAttribute($attribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+    }
 
-        if (empty($setAttribute)) {
-            return;
-        }
-
-        $srcSet = $image->getAttribute($setAttribute);
+    private function handleSourceSet($image, $attribute = self::ATTRIBUTE_SRCSET)
+    {
+        /** @var \DOMElement $image */
+        $srcSet = $image->getAttribute($attribute);
         if (empty($srcSet)) {
             return;
         }
@@ -136,21 +139,26 @@ class ReplaceHtml
         $sources = explode(', ', $srcSet);
         $newSources = [];
 
+        $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
+        $customMutations = false === empty($imageClasses) ? array_intersect_key($this->mutations, array_flip($imageClasses)) : [];
+
         foreach ($sources as $source) {
             list($url, $w) = explode(' ', $source);
             $widthAsInt = (int)$w;
             $customMutation = "resize_$widthAsInt";
-            if ($ratio !== null) {
-                $h = round($widthAsInt / $ratio);
-                $customMutation .= "x$h";
-            }
             $prefixedSource = $this->prefixImageSource($url);
             $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
             $newSources[] = "$newUrl $w";
 
         }
 
-        $image->setAttribute($setAttribute, implode(', ', $newSources));
+        $image->setAttribute($attribute, implode(', ', $newSources));
+    }
+
+    private function hasMultipleSources($image, $attribute)
+    {
+        /** @var \DOMElement $image */
+        return count(explode(', ', $image->getAttribute($attribute))) > 1;
     }
 
     private function toAbsoluteUri(&$uri)
