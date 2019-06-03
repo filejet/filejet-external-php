@@ -1,16 +1,17 @@
 <?php
 
-declare(strict_types=1);
-
 namespace FileJet\External;
 
 class ReplaceHtml
 {
-    const SOURCE_PLACEHOLDER = "#source#";
-    const MUTATION_PLACEHOLDER = "#mutation#";
+    const SOURCE_PLACEHOLDER = '#source#';
+    const MUTATION_PLACEHOLDER = '#mutation#';
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
     const FILEJET_IMAGE_CLASS = 'fj-image';
+
+    const ATTRIBUTE_SRC = 'src';
+    const ATTRIBUTE_SRCSET = 'srcset';
 
     /** @var string */
     private $urlPrefix;
@@ -20,13 +21,19 @@ class ReplaceHtml
     private $basePath;
     /** @var string */
     private $secret;
+    /** @var array */
+    private $ignored = [];
+    /** @var array */
+    private $mutations = [];
+    /** @var array */
+    private $lazyLoaded = [];
 
     public function __construct(
-        string $storageId,
-        string $lazyLoadAttribute = null,
-        string $basePath = null,
-        string $secret = null
-    ) {
+        $storageId,
+        $basePath = null,
+        $secret = null
+    )
+    {
         $source = self::SOURCE_PLACEHOLDER;
         $mutation = self::MUTATION_PLACEHOLDER;
         $this->urlPrefix = "https://{$storageId}.5gcdn.net/ext/{$mutation}?src={$source}";
@@ -35,9 +42,11 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
-    public function replaceImages(string $content = null, array $ignored = [], array $mutations = []): string
+    public function replaceImages($content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
-        if (empty($content)) return '';
+        if ($content === null) {
+            return '';
+        }
 
         libxml_use_internal_errors(true);
         $this->dom->loadHTML(
@@ -46,12 +55,16 @@ class ReplaceHtml
         );
         libxml_clear_errors();
 
-        $this->replaceImageTags($ignored, $mutations);
+        $this->ignored = $ignored;
+        $this->mutations = $mutations;
+        $this->lazyLoaded = $lazyLoaded;
+
+        $this->replaceImageTags();
         $this->replaceStyleBackground();
         return $this->dom->saveHTML();
     }
 
-    public function prefixImageSource(string $originalSource): string
+    public function prefixImageSource($originalSource)
     {
         $source = strpos($originalSource, $this->basePath) === 0
             ? $originalSource
@@ -60,95 +73,116 @@ class ReplaceHtml
         return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($originalSource);
     }
 
-    private function replaceImageTags(array $ignored = [], array $mutations = [])
+    private function replaceImageTags()
     {
         /** @var \DOMElement[] $images */
         $images = $this->dom->getElementsByTagName('img');
-        $ignored = array_merge($ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
+        $ignored = array_merge($this->ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
 
         foreach ($images as $image) {
-            if ($image->parentNode->tagName === 'noscript') continue;
-
-            $imageClasses = explode(' ', $image->getAttribute('class') ?? '');
-            if (false === empty(array_intersect($imageClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', ($class = $image->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
-            $parentClasses = explode(' ', $image->parentNode->getAttribute('class') ?? '');
-            if (false === empty(array_intersect($parentClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
-            $originalSource = $image->getAttribute('src');
-            if($this->isDataURL($originalSource)) continue;
-            if (strpos($originalSource, '.svg') !== false) continue;
+            $this->handleSource($image);
 
-            $parsed = parse_url($originalSource);
-            if (empty($parsed['scheme'])) {
-                $path = $parsed['path'] ?? '';
-                $host = $_SERVER['HTTP_HOST'];
-                if(strpos($originalSource, $host) !== false) {
-                    $path = substr(strstr($originalSource, $host), strlen($host));
-                }
-                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
-                $originalSource = $actual_link . '/' . trim($path, '/');
+            foreach ($this->lazyLoaded as $src => $srcset) {
+                $this->handleSource($image, $src, $srcset);
             }
-
-            $fill = false;
-            if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) $fill = true;
-
-            $height = $this->getHeight($image);
-            $width = $this->getWidth($image);
-            $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
-
-            $customMutations = false === empty($imageClasses) ? array_intersect_key($mutations, array_flip($imageClasses)) : [];
-            $prefixedSource = $this->prefixImageSource($originalSource);
-            $image->setAttribute('src', $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
-
-            $srcSet = $image->getAttribute('srcset');
-            if (empty($srcSet)) {
-                continue;
-            }
-
-            $sources = explode(', ', $srcSet);
-            $newSources = [];
-
-            foreach ($sources as $source) {
-                list($url, $w) = explode(' ', $source);
-                $widthAsInt = (int)$w;
-                $customMutation = "resize_$widthAsInt";
-                if ($ratio !== null) {
-                    $h = round($widthAsInt / $ratio);
-                    $customMutation .= "x$h";
-                }
-                $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
-                $newSources[] = "$newUrl $w";
-
-            }
-
-            $image->setAttribute('srcset', implode(', ', $newSources));
         }
     }
 
-    public function getAspectRatio(int $width, int $height): float
+    private function handleSource($image, $originalAttribute = self::ATTRIBUTE_SRC, $setAttribute = self::ATTRIBUTE_SRCSET)
+    {
+        /** @var \DOMElement $image
+         */
+        $originalSource = $image->getAttribute($originalAttribute);
+        if ($this->isDataURL($originalSource)) {
+            return;
+        }
+        if (strpos($originalSource, '.svg') !== false) {
+            return;
+        }
+
+        $this->toAbsoluteUri($originalSource);
+
+        $fill = false;
+        if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) {
+            $fill = true;
+        }
+
+        $height = $this->getHeight($image);
+        $width = $this->getWidth($image);
+        $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
+
+        $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
+        $customMutations = false === empty($imageClasses) ? array_intersect_key($this->mutations, array_flip($imageClasses)) : [];
+        $prefixedSource = $this->prefixImageSource($originalSource);
+        $image->setAttribute($originalAttribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+
+        if (empty($setAttribute)) {
+            return;
+        }
+
+        $srcSet = $image->getAttribute($setAttribute);
+        if (empty($srcSet)) {
+            return;
+        }
+
+        $sources = explode(', ', $srcSet);
+        $newSources = [];
+
+        foreach ($sources as $source) {
+            list($url, $w) = explode(' ', $source);
+            $widthAsInt = (int)$w;
+            $customMutation = "resize_$widthAsInt";
+            if ($ratio !== null) {
+                $h = round($widthAsInt / $ratio);
+                $customMutation .= "x$h";
+            }
+            $prefixedSource = $this->prefixImageSource($url);
+            $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
+            $newSources[] = "$newUrl $w";
+
+        }
+
+        $image->setAttribute($setAttribute, implode(', ', $newSources));
+    }
+
+    private function toAbsoluteUri(&$uri)
+    {
+        $parsed = parse_url($uri);
+        if (empty($parsed['scheme'])) {
+            $path = $parsed['path'] ?: '';
+            $host = $_SERVER['HTTP_HOST'];
+            if (strpos($uri, $host) !== false) {
+                $path = substr(strstr($uri, $host), strlen($host));
+            }
+            $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
+            $uri = $actual_link . '/' . trim($path, '/');
+        }
+    }
+
+    public function getAspectRatio($width, $height)
     {
         return $width > $height ? ($width / $height) : ($height / $width);
     }
 
-    public function mutateImage(string $source, string $height = null, string $width = null, bool $fill = false, array $customMutations = []): string
+    public function mutateImage($source, $height = null, $width = null, $fill = false, array $customMutations = [])
     {
         $mutation = 'auto';
-
         if (false === empty($customMutations)) {
             $mutation = implode(',', array_merge($customMutations, ['auto']));
         } else if (!empty($height) && empty($width)) {
-            $mutation = "resize_x" . $height . "shrink," . $mutation;
+            $mutation = 'resize_x' . $height . 'shrink,' . $mutation;
         } else if (empty($height) && !empty($width)) {
-            $mutation = "resize_" . $width . "shrink," . $mutation;
-        } else if ($fill && !empty($height) && !empty($width)) {
-            $mutation = "resize_" . $width . "x" . $height . ",crop_" . $width . "x" . $height . ",pos_center,fill_" . $width . "x" . $height . ",bg_transparent," . $mutation;
+            $mutation = 'resize_' . $width . 'shrink,' . $mutation;
         } else if (!empty($height) && !empty($width)) {
-            $mutation = "fit_$width" . "x" . "$height," . $mutation;
+            $mutation = $fill ? 'resize_' . $width . 'x' . $height . ',crop_' . $width . 'x' . $height . ',pos_center,fill_' . $width . 'x' . $height . ',bg_transparent,' . $mutation : "fit_$width" . 'x' . "$height," . $mutation;
         }
         return str_replace(self::MUTATION_PLACEHOLDER, $mutation, $source);
     }
@@ -165,17 +199,20 @@ class ReplaceHtml
 
     private function getDimension($image, array $dimensions)
     {
-
+        /** @var \DOMElement $image */
         $style = $image->getAttribute('style');
         $style = stripslashes($style);
         $rules = explode(';', $style);
 
         foreach ($dimensions as $dimension) {
             $value = null;
-            if (!empty($value = $image->getAttribute($dimension))) return $value;
+            if (!empty($value = $image->getAttribute($dimension))) {
+                return $value;
+            }
 
-            //if no styles are present
-            if (count($rules) == 0) continue;
+            if (count($rules) === 0) {
+                continue;
+            }
 
             foreach ($rules as $rule) {
                 if (strpos($rule, $dimension) !== false) {
@@ -186,9 +223,13 @@ class ReplaceHtml
                         || strpos($rule, 'vh') !== false
                         || strpos($rule, '%') !== false
                         || strpos($rule, 'ch') !== false
-                    ) continue;
-                    $dimensionValue = trim(str_replace('px', '', substr($rule, strpos($rule, ":") + 1)));
-                    if (is_numeric($dimensionValue)) return $dimensionValue;
+                    ) {
+                        continue;
+                    }
+                    $dimensionValue = trim(str_replace('px', '', substr($rule, strpos($rule, ':') + 1)));
+                    if (is_numeric($dimensionValue)) {
+                        return $dimensionValue;
+                    }
 
                 }
             }
@@ -204,9 +245,9 @@ class ReplaceHtml
         return '&sig=' . hash_hmac('sha256', $url, $this->secret);
     }
 
-    private function isDataURL(string $source)
+    private function isDataURL($source)
     {
-        return (bool) preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
+        return (bool)preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
 
     private function replaceStyleBackground()
@@ -230,7 +271,7 @@ class ReplaceHtml
         $element->setAttribute('class', $this->addClass($class, self::FILEJET_IMAGE_CLASS));
     }
 
-    private function addClass(string $original, string $new): string
+    private function addClass($original, $new)
     {
         if ($original === '') {
             return $new;
@@ -239,8 +280,7 @@ class ReplaceHtml
         $classes[] = $new;
         return implode(' ', $classes);
     }
-
-    private function prefixBackgroundImages(string $style)
+    private function prefixBackgroundImages($style)
     {
         $style = stripslashes($style);
         $rules = explode(';', $style);
@@ -265,6 +305,4 @@ class ReplaceHtml
         }
         return $style;
     }
-
 }
-
