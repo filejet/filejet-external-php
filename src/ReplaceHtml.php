@@ -278,7 +278,7 @@ class ReplaceHtml
         }
         $classes = explode(' ', $original);
         $classes[] = $new;
-        return implode(' ', $classes);
+        return implode(' ', array_unique($classes));
     }
     private function prefixBackgroundImages($style)
     {
