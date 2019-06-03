@@ -9,6 +9,9 @@ class ReplaceHtml
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
 
+    const ATTRIBUTE_SRC = 'src';
+    const ATTRIBUTE_SRCSET = 'srcset';
+
     /** @var string */
     private $urlPrefix;
     /** @var \DOMDocument */
@@ -17,10 +20,15 @@ class ReplaceHtml
     private $basePath;
     /** @var string */
     private $secret;
+    /** @var array */
+    private $ignored = [];
+    /** @var array */
+    private $mutations = [];
+    /** @var array */
+    private $lazyLoaded = [];
 
     public function __construct(
         $storageId,
-        $lazyLoadAttribute = null,
         $basePath = null,
         $secret = null
     )
@@ -33,7 +41,7 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
-    public function replaceImages($content = null, array $ignored = [], array $mutations = [])
+    public function replaceImages($content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
         if ($content === null) {
             return '';
@@ -46,7 +54,11 @@ class ReplaceHtml
         );
         libxml_clear_errors();
 
-        $this->replaceImageTags($ignored, $mutations);
+        $this->ignored = $ignored;
+        $this->mutations = $mutations;
+        $this->lazyLoaded = $lazyLoaded;
+
+        $this->replaceImageTags();
         return $this->dom->saveHTML();
     }
 
@@ -59,73 +71,97 @@ class ReplaceHtml
         return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($originalSource);
     }
 
-    private function replaceImageTags(array $ignored = [], array $mutations = [])
+    private function replaceImageTags()
     {
         /** @var \DOMElement[] $images */
         $images = $this->dom->getElementsByTagName('img');
-        $ignored = array_merge($ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
+        $ignored = array_merge($this->ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
 
         foreach ($images as $image) {
-            if ($image->parentNode->tagName === 'noscript') continue;
-
-            $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
-            if (false === empty(array_intersect($imageClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', ($class = $image->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
-            $parentClasses = explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : '');
-            if (false === empty(array_intersect($parentClasses, $ignored))) {
+            if (false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
-            $originalSource = $image->getAttribute('src');
-            if ($this->isDataURL($originalSource)) continue;
-            if (strpos($originalSource, '.svg') !== false) continue;
+            $this->handleSource($image);
 
-            $parsed = parse_url($originalSource);
-            if (empty($parsed['scheme'])) {
-                $path = $parsed['path'] ?: '';
-                $host = $_SERVER['HTTP_HOST'];
-                if (strpos($originalSource, $host) !== false) {
-                    $path = substr(strstr($originalSource, $host), strlen($host));
-                }
-                $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
-                $originalSource = $actual_link . '/' . trim($path, '/');
+            foreach ($this->lazyLoaded as $src => $srcset) {
+                $this->handleSource($image, $src, $srcset);
             }
+        }
+    }
 
-            $fill = false;
-            if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) $fill = true;
+    private function handleSource($image, $originalAttribute = self::ATTRIBUTE_SRC, $setAttribute = self::ATTRIBUTE_SRCSET)
+    {
+        /** @var \DOMElement $image
+         */
+        $originalSource = $image->getAttribute($originalAttribute);
+        if ($this->isDataURL($originalSource)) {
+            return;
+        }
+        if (strpos($originalSource, '.svg') !== false) {
+            return;
+        }
 
-            $height = $this->getHeight($image);
-            $width = $this->getWidth($image);
-            $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
+        $this->toAbsoluteUri($originalSource);
 
-            $customMutations = false === empty($imageClasses) ? array_intersect_key($mutations, array_flip($imageClasses)) : [];
-            $prefixedSource = $this->prefixImageSource($originalSource);
-            $image->setAttribute('src', $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+        $fill = false;
+        if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) {
+            $fill = true;
+        }
 
-            $srcSet = $image->getAttribute('srcset');
-            if (empty($srcSet)) {
-                continue;
+        $height = $this->getHeight($image);
+        $width = $this->getWidth($image);
+        $ratio = $width !== null && $height !== null ? $this->getAspectRatio((int)$width, (int)$height) : null;
+
+        $imageClasses = explode(' ', ($class = $image->getAttribute('class')) ? $class : '');
+        $customMutations = false === empty($imageClasses) ? array_intersect_key($this->mutations, array_flip($imageClasses)) : [];
+        $prefixedSource = $this->prefixImageSource($originalSource);
+        $image->setAttribute($originalAttribute, $this->mutateImage($prefixedSource, $height, $width, $fill, $customMutations));
+
+        if (empty($setAttribute)) {
+            return;
+        }
+
+        $srcSet = $image->getAttribute($setAttribute);
+        if (empty($srcSet)) {
+            return;
+        }
+
+        $sources = explode(', ', $srcSet);
+        $newSources = [];
+
+        foreach ($sources as $source) {
+            list($url, $w) = explode(' ', $source);
+            $widthAsInt = (int)$w;
+            $customMutation = "resize_$widthAsInt";
+            if ($ratio !== null) {
+                $h = round($widthAsInt / $ratio);
+                $customMutation .= "x$h";
             }
+            $prefixedSource = $this->prefixImageSource($url);
+            $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
+            $newSources[] = "$newUrl $w";
 
-            $sources = explode(', ', $srcSet);
-            $newSources = [];
+        }
 
-            foreach ($sources as $source) {
-                list($url, $w) = explode(' ', $source);
-                $widthAsInt = (int)$w;
-                $customMutation = "resize_$widthAsInt";
-                if ($ratio !== null) {
-                    $h = round($widthAsInt / $ratio);
-                    $customMutation .= "x$h";
-                }
-                $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
-                $newSources[] = "$newUrl $w";
+        $image->setAttribute($setAttribute, implode(', ', $newSources));
+    }
 
+    private function toAbsoluteUri(&$uri)
+    {
+        $parsed = parse_url($uri);
+        if (empty($parsed['scheme'])) {
+            $path = $parsed['path'] ?: '';
+            $host = $_SERVER['HTTP_HOST'];
+            if (strpos($uri, $host) !== false) {
+                $path = substr(strstr($uri, $host), strlen($host));
             }
-
-            $image->setAttribute('srcset', implode(', ', $newSources));
+            $actual_link = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$host";
+            $uri = $actual_link . '/' . trim($path, '/');
         }
     }
 
@@ -137,7 +173,6 @@ class ReplaceHtml
     public function mutateImage($source, $height = null, $width = null, $fill = false, array $customMutations = [])
     {
         $mutation = 'auto';
-
         if (false === empty($customMutations)) {
             $mutation = implode(',', array_merge($customMutations, ['auto']));
         } else if (!empty($height) && empty($width)) {
@@ -162,17 +197,20 @@ class ReplaceHtml
 
     private function getDimension($image, array $dimensions)
     {
-
+        /** @var \DOMElement $image */
         $style = $image->getAttribute('style');
         $style = stripslashes($style);
         $rules = explode(';', $style);
 
         foreach ($dimensions as $dimension) {
             $value = null;
-            if (!empty($value = $image->getAttribute($dimension))) return $value;
+            if (!empty($value = $image->getAttribute($dimension))) {
+                return $value;
+            }
 
-            //if no styles are present
-            if (count($rules) === 0) continue;
+            if (count($rules) === 0) {
+                continue;
+            }
 
             foreach ($rules as $rule) {
                 if (strpos($rule, $dimension) !== false) {
@@ -183,9 +221,13 @@ class ReplaceHtml
                         || strpos($rule, 'vh') !== false
                         || strpos($rule, '%') !== false
                         || strpos($rule, 'ch') !== false
-                    ) continue;
-                    $dimensionValue = trim(str_replace('px', '', substr($rule, strpos($rule, ":") + 1)));
-                    if (is_numeric($dimensionValue)) return $dimensionValue;
+                    ) {
+                        continue;
+                    }
+                    $dimensionValue = trim(str_replace('px', '', substr($rule, strpos($rule, ':') + 1)));
+                    if (is_numeric($dimensionValue)) {
+                        return $dimensionValue;
+                    }
 
                 }
             }
@@ -195,7 +237,9 @@ class ReplaceHtml
 
     private function signUrl($url)
     {
-        if ($this->secret === null) return '';
+        if ($this->secret === null) {
+            return '';
+        }
         return '&sig=' . hash_hmac('sha256', $url, $this->secret);
     }
 
@@ -204,4 +248,3 @@ class ReplaceHtml
         return (bool)preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
     }
 }
-
