@@ -255,7 +255,7 @@ class ReplaceHtml
 
     private function isDataURL($source)
     {
-        return (bool)preg_match("/^\s*data:([a-z]+\/[a-z]+(;[a-z\-]+\=[a-z\-]+)?)?(;base64)?,[a-z0-9\!\$\&\'\,\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*\s*$/i", $source);
+        return (bool)preg_match("/^\s*data:[^;]+(;base64)?/i", $source);
     }
 
     private function replaceStyleBackground()
