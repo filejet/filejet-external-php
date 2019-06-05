@@ -98,7 +98,7 @@ class ReplaceHtml
                 }
                 $this->hasMultipleSources($image, $attribute) ? $this->handleSourceSet($image, $attribute) : $this->handleSource($image, $attribute);
             }
-            $this->replaceClass($image);
+            $this->addInitializedClass($image);
         }
     }
 
@@ -270,11 +270,11 @@ class ReplaceHtml
                 continue;
             }
             $image->setAttribute('style', $this->prefixBackgroundImages($style));
-            $this->replaceClass($image);
-        };
+            $this->addInitializedClass($image);
+        }
     }
 
-    private function replaceClass(\DOMElement $element)
+    private function addInitializedClass(\DOMElement $element)
     {
         $class = $element->getAttribute('class');
         $element->setAttribute('class', $this->addClass($class, self::FILEJET_INITIALIZED_CLASS));
