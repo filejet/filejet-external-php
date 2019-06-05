@@ -8,7 +8,7 @@ class ReplaceHtml
     const MUTATION_PLACEHOLDER = '#mutation#';
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
-    const FILEJET_IMAGE_CLASS = 'fj-image';
+    const FILEJET_INITIALIZED_CLASS = 'fj-initialized';
 
     const ATTRIBUTE_SRC = 'src';
     const ATTRIBUTE_SRCSET = 'srcset';
@@ -44,7 +44,7 @@ class ReplaceHtml
 
     public function replaceImages($content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
-        if ($content === null) {
+        if (empty(trim($content))) {
             return '';
         }
 
@@ -77,7 +77,7 @@ class ReplaceHtml
     {
         /** @var \DOMElement[] $images */
         $images = $this->dom->getElementsByTagName('img');
-        $ignored = array_merge($this->ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS]);
+        $ignored = array_merge($this->ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS, self::FILEJET_INITIALIZED_CLASS => self::FILEJET_INITIALIZED_CLASS]);
 
         foreach ($images as $image) {
             if (false === empty(array_intersect(explode(' ', ($class = $image->getAttribute('class')) ? $class : ''), $ignored))) {
@@ -98,6 +98,7 @@ class ReplaceHtml
                 }
                 $this->hasMultipleSources($image, $attribute) ? $this->handleSourceSet($image, $attribute) : $this->handleSource($image, $attribute);
             }
+            $this->addInitializedClass($image);
         }
     }
 
@@ -269,14 +270,14 @@ class ReplaceHtml
                 continue;
             }
             $image->setAttribute('style', $this->prefixBackgroundImages($style));
-            $this->replaceClass($image);
-        };
+            $this->addInitializedClass($image);
+        }
     }
 
-    private function replaceClass(\DOMElement $element)
+    private function addInitializedClass(\DOMElement $element)
     {
         $class = $element->getAttribute('class');
-        $element->setAttribute('class', $this->addClass($class, self::FILEJET_IMAGE_CLASS));
+        $element->setAttribute('class', $this->addClass($class, self::FILEJET_INITIALIZED_CLASS));
     }
 
     private function addClass($original, $new)
