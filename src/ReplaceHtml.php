@@ -9,7 +9,6 @@ class ReplaceHtml
     const FILEJET_IGNORE_CLASS = 'fj-ignore';
     const FILEJET_FILL_CLASS = 'fj-fill';
     const FILEJET_INITIALIZED_CLASS = 'fj-initialized';
-    const FILEJET_MUTATION = 'data-mutation';
 
     const ATTRIBUTE_SRC = 'src';
     const ATTRIBUTE_SRCSET = 'srcset';
@@ -32,9 +31,7 @@ class ReplaceHtml
     public function __construct(
         $storageId,
         $basePath = null,
-        $secret = null,
-        $baseUrl = null,
-        $dev = false
+        $secret = null
     )
     {
         $source = self::SOURCE_PLACEHOLDER;
