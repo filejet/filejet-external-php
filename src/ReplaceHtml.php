@@ -70,7 +70,11 @@ class ReplaceHtml
             ? $originalSource
             : "{$this->basePath}{$originalSource}";
 
-        return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($originalSource);
+        $parsed = parse_url($source);
+        $path = implode('/', array_map('rawurlencode', explode('/', $parsed['path'])));
+        $source = str_replace($parsed['path'], $path, $source);
+
+        return str_replace(self::SOURCE_PLACEHOLDER, urlencode($source), $this->urlPrefix) . $this->signUrl($source);
     }
 
     private function replaceImageTags()
@@ -84,7 +88,7 @@ class ReplaceHtml
                 continue;
             }
 
-            if (false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
+            if(($image->parentNode->nodeType === XML_ELEMENT_NODE) && false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
@@ -116,7 +120,7 @@ class ReplaceHtml
         $this->toAbsoluteUri($originalSource);
 
         $fill = false;
-        if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false) {
+        if (strpos($image->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false || (($image->parentNode->nodeType === XML_ELEMENT_NODE) && strpos($image->parentNode->getAttribute('class'), self::FILEJET_FILL_CLASS) !== false)) {
             $fill = true;
         }
 
