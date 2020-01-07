@@ -42,6 +42,13 @@ class ReplaceHtml
         $this->dom = new \DOMDocument();
     }
 
+    public function removeUtf8Bom($text)
+    {
+        $bom = pack('H*','EFBBBF');
+        $text = preg_replace("/^$bom/", '', $text);
+        return $text;
+    }
+
     public function replaceImages($content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
         if (empty(trim($content))) {
@@ -50,7 +57,7 @@ class ReplaceHtml
 
         libxml_use_internal_errors(true);
         $this->dom->loadHTML(
-            mb_convert_encoding($content, 'HTML-ENTITIES', 'UTF-8'),
+            mb_convert_encoding($this->removeUtf8Bom($content), 'HTML-ENTITIES', 'UTF-8'),
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
         );
         libxml_clear_errors();
