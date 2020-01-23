@@ -48,13 +48,7 @@ class ReplaceHtml
         $text = preg_replace("/^$bom/", '', $text);
         return $text;
     }
-
-    public function isJson($string)
-    {
-        json_decode($string);
-        return (json_last_error() == JSON_ERROR_NONE);
-    }
-
+    
     public function replaceImages($content = null, array $ignored = [], array $mutations = [], array $lazyLoaded = [])
     {
         if (empty(trim($content))) {
@@ -64,31 +58,6 @@ class ReplaceHtml
         $this->ignored = $ignored;
         $this->mutations = $mutations;
         $this->lazyLoaded = $lazyLoaded;
-
-        if($this->isJson($content)) {
-            $re = '/<img([\w\W]+?)>/m';
-            preg_match_all($re, $content, $matches, PREG_SET_ORDER, 0);
-            $result = array_map(function($match) { return $match[0];}, $matches);
-
-            foreach ($result as $tag) {
-                $this->dom = new \DOMDocument();
-                $this->dom->loadHTML(
-                    mb_convert_encoding($this->removeUtf8Bom(preg_replace('/\\\\/', '', $tag)), 'HTML-ENTITIES', 'UTF-8'),
-                    LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
-                );
-
-                libxml_clear_errors();
-
-                $this->replaceImageTags();
-                $this->replaceStyleBackground();
-
-                $parsed = $this->dom->saveHTML();
-
-                $content = str_replace($tag, substr(json_encode($parsed), 1, -1), $content);
-            }
-
-            return $content;
-        }
 
         libxml_use_internal_errors(true);
         $this->dom->loadHTML(
