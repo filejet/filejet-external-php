@@ -55,6 +55,10 @@ class ReplaceHtml
             return '';
         }
 
+        if ($content === strip_tags($content)) {
+            return $content;
+        }
+
         $this->ignored = $ignored;
         $this->mutations = $mutations;
         $this->lazyLoaded = $lazyLoaded;
