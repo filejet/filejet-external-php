@@ -71,6 +71,7 @@ class ReplaceHtml
         libxml_clear_errors();
 
         $this->replaceImageTags();
+        $this->replacePictureTags();
         $this->replaceStyleBackground();
         return $this->dom->saveHTML();
     }
@@ -99,13 +100,14 @@ class ReplaceHtml
                 continue;
             }
 
-            if(($image->parentNode->nodeType === XML_ELEMENT_NODE) && false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
+            if (($image->parentNode->nodeType === XML_ELEMENT_NODE) && false === empty(array_intersect(explode(' ', ($class = $image->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
                 continue;
             }
 
             /** DEFAULT */
             $this->handleSource($image);
             $this->handleSourceSet($image);
+            $this->addLoadingLazy($image);
 
             foreach ($this->lazyLoaded as $attribute) {
                 if(false === $image->hasAttribute($attribute)) {
@@ -114,6 +116,33 @@ class ReplaceHtml
                 $this->hasMultipleSources($image, $attribute) ? $this->handleSourceSet($image, $attribute) : $this->handleSource($image, $attribute);
             }
             $this->addInitializedClass($image);
+        }
+    }
+
+    private function replacePictureTags()
+    {
+        /** @var \DOMElement[] $pictures */
+        $pictures = $this->dom->getElementsByTagName('picture');
+        $ignored = array_merge($this->ignored, [self::FILEJET_IGNORE_CLASS => self::FILEJET_IGNORE_CLASS, self::FILEJET_INITIALIZED_CLASS => self::FILEJET_INITIALIZED_CLASS]);
+
+        foreach ($pictures as $picture) {
+            if (false === empty(array_intersect(explode(' ', ($class = $picture->getAttribute('class')) ? $class : ''), $ignored))) {
+                continue;
+            }
+
+            if (($picture->parentNode->nodeType === XML_ELEMENT_NODE) && false === empty(array_intersect(explode(' ', ($class = $picture->parentNode->getAttribute('class')) ? $class : ''), $ignored))) {
+                continue;
+            }
+
+            foreach (iterator_to_array($picture->childNodes) as $child) {
+                if ($child->nodeType !== XML_ELEMENT_NODE) continue;
+                if ($child->nodeName !== 'source') continue;
+
+                $this->handleSourceSet($child);
+                $this->addInitializedClass($child);
+            }
+
+            $this->addInitializedClass($picture);
         }
     }
 
@@ -160,12 +189,19 @@ class ReplaceHtml
 
         foreach ($sources as $source) {
             list($url, $w) = explode(' ', $source);
-            $widthAsInt = (int)$w;
-            $customMutation = "resize_$widthAsInt";
-            $prefixedSource = $this->prefixImageSource($url);
-            $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
-            $newSources[] = "$newUrl $w";
+            
+            if (strpos($w, 'w') !== false) {
+                $widthAsInt = (int)$w;
+                $customMutation = "resize_$widthAsInt";
 
+                $prefixedSource = $this->prefixImageSource($url);
+                $newUrl = $this->mutateImage($prefixedSource, null, null, false, array_merge($customMutations, [$customMutation]));
+            } else {
+                $prefixedSource = $this->prefixImageSource($url);
+                $newUrl = $this->mutateImage($prefixedSource);
+            }
+
+            $newSources[] = "$newUrl $w";
         }
 
         $image->setAttribute($attribute, implode(', ', $newSources));
@@ -295,6 +331,12 @@ class ReplaceHtml
         $element->setAttribute('class', $this->addClass($class, self::FILEJET_INITIALIZED_CLASS));
     }
 
+    private function addLoadingLazy(\DOMElement $element)
+    {
+        if ($element->hasAttribute('loading')) return;
+        $element->setAttribute('loading', 'lazy');
+    }
+
     private function addClass($original, $new)
     {
         if ($original === '') {
@@ -304,6 +346,7 @@ class ReplaceHtml
         $classes[] = $new;
         return implode(' ', array_unique($classes));
     }
+
     private function prefixBackgroundImages($style)
     {
         $style = stripslashes($style);
